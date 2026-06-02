@@ -21,6 +21,7 @@
     .panel-box { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 12px; }
     .panel-box h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 2px; color: #64748b; margin-bottom: 8px; }
     .panel-box .value { font-size: 28px; font-weight: bold; color: #e2e8f0; }
+    #nextCanvas { background: #0f172a; border: 1px solid #334155; display: block; margin-top: 8px; }
     #overlay {
       display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
       background: rgba(0,0,0,0.75); justify-content: center; align-items: center;
@@ -49,6 +50,11 @@
     <div class="panel-box"><h3>점수</h3><div class="value" id="scoreDisplay">0</div></div>
     <div class="panel-box"><h3>레벨</h3><div class="value" id="levelDisplay">1</div></div>
     <div class="panel-box"><h3>라인</h3><div class="value" id="linesDisplay">0</div></div>
+    <!-- 다음 블록 미리보기 -->
+    <div class="panel-box">
+      <h3>NEXT</h3>
+      <canvas id="nextCanvas" width="100" height="100"></canvas>
+    </div>
     <div class="panel-box controls"><h3>조작법</h3>← → 이동<br>↑ 회전<br>↓ 빠르게</div>
   </div>
 </div>
@@ -72,11 +78,14 @@ const COLORS = {
 };
 const PIECE_TYPES = Object.keys(SHAPES);
 
-const canvas = document.getElementById('gameCanvas');
-const ctx    = canvas.getContext('2d');
+const canvas     = document.getElementById('gameCanvas');
+const ctx        = canvas.getContext('2d');
+const nextCanvas = document.getElementById('nextCanvas');
+const nextCtx    = nextCanvas.getContext('2d');
 
 let board        = [];
 let currentPiece = null;
+let nextPiece    = null;   // 다음 블록
 let score        = 0;
 let level        = 1;
 let linesCleared = 0;
@@ -84,31 +93,54 @@ let gameOver     = false;
 let lastTime     = 0;
 let dropInterval = 1000;
 
-function drawBlock(x, y, color) {
-  ctx.fillStyle = color;
-  ctx.fillRect(x * BLOCK_SIZE, y * BLOCK_SIZE, BLOCK_SIZE - 1, BLOCK_SIZE - 1);
-  ctx.fillStyle = 'rgba(255,255,255,0.2)';
-  ctx.fillRect(x * BLOCK_SIZE, y * BLOCK_SIZE, BLOCK_SIZE - 1, 4);
+function drawBlock(x, y, color, context = ctx, size = BLOCK_SIZE) {
+  context.fillStyle = color;
+  context.fillRect(x * size, y * size, size - 1, size - 1);
+  context.fillStyle = 'rgba(255,255,255,0.2)';
+  context.fillRect(x * size, y * size, size - 1, 4);
 }
 
 // 보드 초기화
 function initBoard() {
   board = [];
-  for (let r = 0; r < ROWS; r++) {
+  for (let r = 0; r < ROWS; r++)
     board.push(new Array(COLS).fill(null));
-  }
 }
 
-// 새 블록 생성
-function createPiece() {
+// 랜덤 블록 객체 생성 (할당 없이 반환)
+function randomPiece() {
   const type  = PIECE_TYPES[Math.floor(Math.random() * PIECE_TYPES.length)];
   const shape = SHAPES[type];
-  currentPiece = {
+  return {
     shape,
     color: COLORS[type],
     x: Math.floor((COLS - shape[0].length) / 2),
     y: 0,
   };
+}
+
+// currentPiece = nextPiece, nextPiece = 새 랜덤 블록
+function createPiece() {
+  currentPiece = nextPiece || randomPiece();
+  currentPiece.x = Math.floor((COLS - currentPiece.shape[0].length) / 2);
+  currentPiece.y = 0;
+  nextPiece = randomPiece();
+  drawNextPiece();
+}
+
+// 다음 블록 미리보기 그리기
+function drawNextPiece() {
+  const size = 20;
+  nextCtx.fillStyle = '#0f172a';
+  nextCtx.fillRect(0, 0, nextCanvas.width, nextCanvas.height);
+  if (!nextPiece) return;
+  const shape  = nextPiece.shape;
+  const offsetX = Math.floor((5 - shape[0].length) / 2);
+  const offsetY = Math.floor((5 - shape.length) / 2);
+  for (let r = 0; r < shape.length; r++)
+    for (let c = 0; c < shape[r].length; c++)
+      if (shape[r][c])
+        drawBlock(offsetX + c, offsetY + r, nextPiece.color, nextCtx, size);
 }
 
 // 충돌 감지
@@ -118,9 +150,9 @@ function isCollision(piece, dx, dy) {
       if (!piece.shape[r][c]) continue;
       const newX = piece.x + c + dx;
       const newY = piece.y + r + dy;
-      if (newX < 0 || newX >= COLS) return true;   // 벽
-      if (newY >= ROWS) return true;                // 바닥
-      if (newY >= 0 && board[newY][newX] !== null) return true; // 블록
+      if (newX < 0 || newX >= COLS) return true;
+      if (newY >= ROWS) return true;
+      if (newY >= 0 && board[newY][newX] !== null) return true;
     }
   }
   return false;
@@ -136,37 +168,32 @@ function rotate(shape) {
   return result;
 }
 
-// 블록을 보드에 고정
+// 블록 보드에 고정
 function placePiece() {
-  for (let r = 0; r < currentPiece.shape.length; r++) {
-    for (let c = 0; c < currentPiece.shape[r].length; c++) {
-      if (!currentPiece.shape[r][c]) continue;
-      // 값이 1인 칸을 보드에 색상으로 기록
-      board[currentPiece.y + r][currentPiece.x + c] = currentPiece.color;
-    }
-  }
+  for (let r = 0; r < currentPiece.shape.length; r++)
+    for (let c = 0; c < currentPiece.shape[r].length; c++)
+      if (currentPiece.shape[r][c])
+        board[currentPiece.y + r][currentPiece.x + c] = currentPiece.color;
 }
 
-// 완성된 줄 제거 및 점수 계산
+// 줄 제거 및 점수·레벨 계산
 function clearLines() {
   const points = [0, 100, 300, 500, 800];
   let count = 0;
-
   for (let r = ROWS - 1; r >= 0; r--) {
-    // 해당 행이 모두 채워졌는지 확인
     if (board[r].every(cell => cell !== null)) {
-      board.splice(r, 1);               // 해당 행 제거
-      board.unshift(new Array(COLS).fill(null)); // 맨 위에 빈 행 추가
+      board.splice(r, 1);
+      board.unshift(new Array(COLS).fill(null));
       count++;
-      r++; // 제거 후 같은 인덱스 재검사
+      r++;
     }
   }
-
   if (count > 0) {
     score        += points[count] * level;
     linesCleared += count;
-    level         = Math.floor(linesCleared / 10) + 1;
-    dropInterval  = Math.max(100, 1000 - (level - 1) * 100);
+    // 10줄마다 레벨 1 증가, 속도 증가
+    level        = Math.floor(linesCleared / 10) + 1;
+    dropInterval = Math.max(100, 1000 - (level - 1) * 100);
   }
 }
 
@@ -175,7 +202,6 @@ function draw() {
   ctx.fillStyle = '#0f172a';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // 격자
   ctx.strokeStyle = '#1e293b';
   ctx.lineWidth = 0.5;
   for (let c = 0; c < COLS; c++) {
@@ -185,18 +211,15 @@ function draw() {
     ctx.beginPath(); ctx.moveTo(0, r * BLOCK_SIZE); ctx.lineTo(canvas.width, r * BLOCK_SIZE); ctx.stroke();
   }
 
-  // 고정 블록
   for (let r = 0; r < ROWS; r++)
     for (let c = 0; c < COLS; c++)
       if (board[r][c]) drawBlock(c, r, board[r][c]);
 
-  // 현재 블록
-  if (currentPiece) {
+  if (currentPiece)
     for (let r = 0; r < currentPiece.shape.length; r++)
       for (let c = 0; c < currentPiece.shape[r].length; c++)
         if (currentPiece.shape[r][c])
           drawBlock(currentPiece.x + c, currentPiece.y + r, currentPiece.color);
-  }
 }
 
 // 키보드 입력
@@ -221,7 +244,7 @@ document.addEventListener('keydown', (e) => {
       const rotated = rotate(currentPiece.shape);
       const prev    = currentPiece.shape;
       currentPiece.shape = rotated;
-      if (isCollision(currentPiece, 0, 0)) currentPiece.shape = prev; // 충돌이면 원복
+      if (isCollision(currentPiece, 0, 0)) currentPiece.shape = prev;
       break;
   }
   draw();
@@ -258,7 +281,9 @@ function startGame() {
   initBoard();
   score = 0; level = 1; linesCleared = 0;
   gameOver = false; dropInterval = 1000; lastTime = 0;
-  createPiece(); updateUI();
+  nextPiece = randomPiece();   // 먼저 nextPiece 준비
+  createPiece();               // currentPiece = nextPiece, 새 nextPiece 생성
+  updateUI();
   document.getElementById('overlay').classList.remove('show');
   requestAnimationFrame(gameLoop);
 }
